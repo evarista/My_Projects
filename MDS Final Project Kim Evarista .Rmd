@@ -1,0 +1,301 @@
+---
+title: "MDS Final Project Kim Evarista"
+author: "Kim Evarista"
+date: "07/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+usethis::edit_r_environ()
+Sys.setenv(NOAA_KEY = "igTlGJSevHqGsbDKLdKGLMmBDgnDufAt")
+Sys.setenv(NREL_KEY = "73h8KyAoTQy7wtpgtndvpuhoKGtOL6VqA1Ha2hfw")
+Sys.setenv(OPEN_KEY = "82b5b0f21bd93f7ddf791f75fb307e38")
+```
+
+
+Function 1 
+This first function will return a tidy data frame of NREL Solar Irradiance data by month for specifying a Latitude and Longitude 
+```{r}
+library(jsonlite)
+library(httr)
+
+#b = lat, c = lon, d =  frequency (annual or monthly)
+average_irradiance <- function(b,c,d){
+    avg_url <- "https://developer.nrel.gov/api/solar/solar_resource/v1"
+    req <- GET(avg_url, query = list(
+    format = "json",
+    api_key = Sys.getenv("NREL_KEY"),
+    lat = b,
+    lon = c))
+  response <- content(req)
+ if(d == "annual"){
+  Latitude <- response[5][[1]][1]
+  Longitude <- response[5][[1]][2]
+  Average_Direct_Normal_Irradiance <- response[6][[1]][[1]][1] 
+  Average_Global_Horizontal_Irradiance <- response[6][[1]][[2]][1]
+  Average_Tilt_at_Latitude <- response[6][[1]][[3]][1]
+  #response[6][[1]][[3]]["monthly"][[1]]
+ View(response)
+ }
+  else if(d == "monthly"){
+  Latitude <- response[5][[1]][1]
+  Longitude <- response[5][[1]][2]
+  Average_Direct_Normal_Irradiance <- response[6][[1]][[1]]["monthly"][[1]] 
+  Average_Global_Horizontal_Irradiance <- response[6][[1]][[2]]["monthly"][[1]]
+  Average_Tilt_at_Latitude <- response[6][[1]][[3]]["monthly"][[1]]
+  }
+  Latitude <- as.numeric(unlist(Latitude))
+  Longitude <- as.numeric(unlist(Longitude))
+  Average_Direct_Normal_Irradiance <- as.numeric(unlist(Average_Direct_Normal_Irradiance))
+  Average_Global_Horizontal_Irradiance <- as.numeric(unlist(Average_Global_Horizontal_Irradiance))
+  Average_Tilt_at_Latitude <- as.numeric(unlist(Average_Tilt_at_Latitude))
+  avg_irrad <- as.data.frame(cbind(Latitude, Longitude, Average_Direct_Normal_Irradiance, Average_Global_Horizontal_Irradiance, Average_Tilt_at_Latitude))
+  avg_irrad <- cbind(Month = rownames(avg_irrad), avg_irrad)
+  rownames(avg_irrad) <- 1:nrow(avg_irrad)
+  return(avg_irrad)
+}
+```
+
+
+Dataset 1.
+Scraped Data for list of cities by sunlight duration 
+https://en.wikipedia.org/wiki/List_of_cities_by_sunshine_duration
+The wikipedia list covers the average number of hours of sunlight across 285 Cities across 113 Countries.
+This scrapping also supplies a list of cities that we can use to create a master global dataset by looping through the NREL and NASA APIs. Since these API sources do somewhat limit and hinder the amount of data return (for example: by making the user specify a specific latitude and longitude), this package provides value in that it allows the users to create a query of NREL point in time / current value sunlight data. 
+```{r}
+library(rvest)
+library(stringr)
+library(httr)
+library(dplyr)
+
+table_xml <- GET("https://en.wikipedia.org/wiki/List_of_cities_by_sunshine_duration")
+sun_table <- content(table_xml, as = "text")
+sun_xml <- read_xml(sun_table)
+```
+
+```{r}
+#Sunshine Hours Data table 
+library(rvest)
+library(dplyr)
+wiki <- read_html("https://en.wikipedia.org/wiki/List_of_cities_by_sunshine_duration")
+#use html_node to extract the contents from the html xpath from wikipedia inspection 
+#Africa
+africa_table <- html_node(x = wiki, xpath = "//*[@id='mw-content-text']/div/table[2]")
+africa_table <- html_table(africa_table)
+africa_table <- africa_table[,1:15] %>% 
+  mutate(Continent = rep("Africa",nrow(africa_table))) %>%
+  select(Continent, Country:Year)
+
+#Europe
+europe_table <- html_node(x = wiki, xpath = "//*[@id='mw-content-text']/div/table[4]")
+europe_table <- html_table(europe_table)
+europe_table <- europe_table[,1:15] %>% 
+  mutate(Continent = rep("Europe",nrow(europe_table))) %>%
+  select(Continent, Country:Year)
+
+#North and Central America
+nc_america_table <- html_node(x = wiki, xpath = "//*[@id='mw-content-text']/div/table[5]")
+nc_america_table <- html_table(nc_america_table)
+nc_america_table <- nc_america_table[,1:15] %>% 
+  mutate(Continent = rep("North America",nrow(nc_america_table))) %>%
+  select(Continent, Country:Year)
+ 
+
+#South America
+s_america_table <- html_node(x = wiki, xpath = "//*[@id='mw-content-text']/div/table[6]")
+s_america_table <- html_table(s_america_table)
+s_america_table <- s_america_table[,1:15] %>% 
+  mutate(Continent = rep("South America",nrow(s_america_table))) %>%
+  select(Continent, Country:Year)
+
+#Oceania 
+oceania_table <- html_node(x = wiki, xpath = "//*[@id='mw-content-text']/div/table[7]")
+oceania_table <- html_table(oceania_table)
+oceania_table <- oceania_table[,1:15] %>%
+  mutate(Continent = rep("Oceania",nrow(oceania_table))) %>% 
+  select(Continent, Country:Year)
+  
+global_table <- rbind(africa_table, europe_table, nc_america_table, s_america_table, oceania_table) %>%
+  select(Continent, Country:Year)
+global_table
+```
+
+```{r}
+US_table <- nc_america_table %>% filter(Country == 'United States')
+```
+
+
+```{r}
+#works - Current weather in all American Cities on our list
+api_endpoint1 <- "http://api.openweathermap.org/data/2.5/weather?q="
+api_endpoint2 <-"&units=metric&id=524901&APPID=82b5b0f21bd93f7ddf791f75fb307e38"
+
+test <- list()
+city <- list()
+lat <- list()
+lon <- list()
+weather <- list()
+
+for(i in 1:54){
+  req <- GET(paste0(api_endpoint1,US_table[[3]][i],api_endpoint2,collapse =  ", "))
+  loop_content <- content(req)
+  city[i] <- US_table[[3]][i]
+  lat[i] <- loop_content[[1]][2]
+  lon[i] <- loop_content[[1]][1]
+  weather[i] <- loop_content[[2]][[1]][2]
+}
+city <- unlist(city)
+lat <- unlist(lat)
+lon <- unlist(lon)
+weather <- unlist(weather)
+
+Current_US_Weather <- as.data.frame(cbind(city,lat,lon,weather))
+```
+
+
+```{r}
+#US Solar Radiance by city 
+#Now we need to get the lat / long for the Language import from the Open weather API 
+AMER_City_Latitude <- list()
+AMER_City_Longitude <- list()
+for(i in 1:length(nc_america_table$City)){
+  tryCatch({
+    city <- nc_america_table$City[i]
+    lat_long_req <- GET(paste("api.openweathermap.org/data/2.5/weather?q=",city,"&id=524901&APPID=", open_key, sep= ""))
+   lat_long_content <- content(lat_long_req)
+   AMER_City_Latitude[i] <- lat_long_content$coord$lat
+   AMER_City_Longitude[i] <- lat_long_content$coord$lon 
+   if(http_error(lat_long_req)) stop("NA")  
+   }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+AMER_City_Latitude <- as.numeric(as.character(AMER_City_Latitude))
+AMER_City_Longitude <- as.numeric(as.character(AMER_City_Longitude))
+
+#North Amer Locations Data table 
+Amer_Locations <- as.data.frame(cbind(nc_america_table$Country,nc_america_table$City, AMER_City_Latitude, AMER_City_Longitude))
+colnames(Amer_Locations)[1:4] <- c("Country","City", "Latitude", "Longitude")
+US_Locations <- Amer_Locations %>% filter(Country == "United States")
+```
+
+```{r}
+#Annual DataFrame for US cities 
+
+data_annual <- data.frame()
+for(i in 1:54){
+  df <- average_irradiance(US_Locations[[3]][i], US_Locations[[4]][i],"annual")
+  data_annual <- rbind(data_annual, df)
+}
+City <- US_Locations[[2]][1:31]
+Annual_US_Solar_Data <- cbind(City, data_annual) %>% select(City, Latitude, Longitude, Average_Direct_Normal_Irradiance, Average_Global_Horizontal_Irradiance, Average_Tilt_at_Latitude)
+```
+
+```{r}
+#Join the annual solar irradiance data to the US_table 
+US <- left_join(US_table, Annual_US_Solar_Data, by = 'City')
+```
+
+
+Monthly Solar irradiance data by city 
+```{r}
+US_Locations_with_Loc <- US_Locations %>% filter(!is.na(Latitude))
+monthly <- data.frame()
+#monthly_df <- list
+#monthly_df <- list()
+for(i in 1:50){
+  monthly_df <- average_irradiance(US_Locations_with_Loc[[3]][i], US_Locations_with_Loc[[4]][i], "monthly")
+  monthly <- rbind(monthly, monthly_df)
+  }
+levels(monthly$Month) <- c("January","February","March","April","May","June","July","August","September","October","November","December")
+```
+
+```{r}
+library(purrr)
+#histograms of each city's monthly solar irradiance 
+solar_list <- list()
+for(i in 1:50){
+  solar_list[[i]] <- average_irradiance(US_Locations_with_Loc[[3]][i], US_Locations_with_Loc[[4]][i], "monthly")
+}
+
+sd_by_location <- solar_list %>% map(map_dbl, sd)
+
+SD_Monthly_DNI <- list()
+SD_GHI <- list()
+SD_TAL <-list()
+City <- list()
+for(i in 1:50){
+  SD_Monthly_DNI[i] <- sd_by_location[[i]]["Average_Direct_Normal_Irradiance"]
+  SD_GHI[i] <- sd_by_location[[i]]["Average_Global_Horizontal_Irradiance"]
+  SD_TAL[i] <- sd_by_location[[i]]["Average_Tilt_at_Latitude "]
+}
+City <- as.character(US_Locations_with_Loc$City)
+SD_Monthly_DNI <- unlist(SD_Monthly_DNI)
+SD_GHI <- unlist(SD_GHI)
+sd_final <- as.data.frame(cbind(City, SD_Monthly_DNI,SD_GHI))
+
+US_final <- left_join(US, sd_final, by = "City")
+
+```
+
+
+
+Function 3 - Getting the current weather conditions for each city to join to create a master dataset 
+
+```{r}
+#Get all available locations from the NOAA dataset 
+locations_base <- "https://www.ncdc.noaa.gov/cdo-web/api/v2/locations?limit=1000"
+locations_base2 <- "https://www.ncdc.noaa.gov/cdo-web/api/v2/locations?offset=1000&limit=1000"
+locations_endpoint <- GET(locations_base, add_headers(token = key))
+locations_endpoint2 <- GET(locations_base2, add_headers(token = key))
+http_status(locations_endpoint)
+http_type(locations_endpoint)
+locations_content <- content(locations_endpoint)
+locations_content2 <- content(locations_endpoint2)
+
+City_name <- list()
+City_name2 <- list()
+City_ID <- list()
+City_ID2 <- list()
+limit <- locations_content$metadata$resultset$limit
+for(i in 1:limit){
+  City_name[i] <- locations_content$results[[i]]$name
+  City_ID[i] <- locations_content$results[[i]]$id
+  City_name2[i] <- locations_content2$results[[i]]$name
+  City_ID2[i] <- locations_content2$results[[i]]$id 
+}
+City_name <- unlist(City_name)
+City_ID <- unlist(City_ID)
+City_name2 <- unlist(City_name2)
+City_ID2 <- unlist(City_ID2)
+City_name <- append(City_name, City_name2, after = length(City_name))
+City_ID <- append(City_ID, City_ID2, after = length(City_name))
+
+
+#Now we need to get the lat / long for the Language import from the Open weather API 
+City_Latitude <- list()
+City_Longitude <- list()
+for(i in 1:length(global_table$City)){
+  tryCatch({
+    city <- global_table$City[i]
+    lat_long_req <- GET(paste("api.openweathermap.org/data/2.5/weather?q=",city,"&id=524901&APPID=", open_key, sep= ""))
+   lat_long_content <- content(lat_long_req)
+   City_Latitude[i] <- lat_long_content$coord$lat
+   City_Longitude[i] <- lat_long_content$coord$lon 
+   if(http_error(lat_long_req)) stop("NA")  
+   }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+City_Latitude <- as.numeric(as.character(City_Latitude))
+City_Longitude <- as.numeric(as.character(City_Longitude))
+
+#Global Locations Data table 
+Global_Locations <- as.data.frame(cbind(City_name, City_Latitude, City_Longitude, City_ID))
+View(Global_Locations)
+Global_Locations2 <- as.data.frame(Global_Locations)
+```
+
+
+
